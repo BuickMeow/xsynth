@@ -40,6 +40,7 @@ impl Settings {
         XSynthRealtimeConfig {
             channel_init_options: ChannelInitOptions {
                 fade_out_killing: self.fade_out_killing,
+                max_voices_per_frame: 32,
             },
             render_window_ms: self.render_window_ms,
             format: SynthFormat::Midi,

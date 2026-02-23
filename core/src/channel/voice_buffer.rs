@@ -2,7 +2,6 @@ use super::ChannelInitOptions;
 use crate::voice::{ReleaseType, Voice};
 use std::{
     collections::VecDeque,
-    fmt::Debug,
     ops::{Deref, DerefMut},
 };
 
@@ -27,7 +26,7 @@ impl DerefMut for GroupVoice {
     }
 }
 
-impl Debug for GroupVoice {
+impl std::fmt::Debug for GroupVoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("")
             .field(&self.id)
@@ -144,19 +143,17 @@ impl VoiceBuffer {
         max_voices: Option<usize>,
     ) {
         let id = self.get_id();
+
         for voice in voices {
             self.buffer.push_back(GroupVoice { id, voice });
         }
 
-        // Apply voice limit if configured
         if let Some(max_voices) = max_voices {
             if self.options.fade_out_killing {
-                // For fade out mode, only count non-killed voices
                 while self.get_active_count() > max_voices {
                     self.pop_quietest_voice_group(id);
                 }
             } else {
-                // For immediate kill mode, count all voices in buffer
                 while self.buffer.len() > max_voices {
                     self.pop_quietest_voice_group(id);
                 }
@@ -228,10 +225,6 @@ impl VoiceBuffer {
         // Remove ended voices from buffer
         self.buffer.retain(|v| !v.ended());
     }
-
-    // pub fn iter_voices<'a>(&'a self) -> impl Iterator<Item = &Box<dyn Voice>> + 'a {
-    //     self.buffer.iter().map(|group| &group.voice)
-    // }
 
     pub fn iter_voices_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn Voice>> {
         self.buffer.iter_mut().map(|group| &mut group.voice)

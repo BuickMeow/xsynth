@@ -8,11 +8,15 @@ use super::{
     ChannelInitOptions, VoiceControlData,
 };
 
+/// Amplitude threshold below which voices are considered silent
+const SILENCE_THRESHOLD: f32 = 0.001;
+
 pub struct KeyData {
     key: u8,
     voices: VoiceBuffer,
     last_voice_count: usize,
     shared_voice_counter: Arc<AtomicU64>,
+    max_voices_per_frame: usize,
 }
 
 impl KeyData {
@@ -26,6 +30,7 @@ impl KeyData {
             voices: VoiceBuffer::new(options),
             last_voice_count: 0,
             shared_voice_counter,
+            max_voices_per_frame: options.max_voices_per_frame.max(1),
         }
     }
 
@@ -66,24 +71,73 @@ impl KeyData {
         }
     }
 
+    /// Render voices to output buffer with adaptive quality
+    /// When voice count is high, only render the loudest voices
     pub fn render_to(&mut self, out: &mut [f32]) {
-        if self.has_voices() {
+        let voice_count = self.voices.voice_count();
+        
+        if voice_count == 0 {
+            self.update_voice_counter(0);
+            return;
+        }
+
+        // Fast path: small number of voices, render all
+        if voice_count <= self.max_voices_per_frame {
             for voice in &mut self.voices.iter_voices_mut() {
                 voice.render_to(out);
             }
-            self.voices.remove_ended_voices();
+        } else {
+            // Slow path: many voices, sort by amplitude and render only the loudest
+            self.render_with_priority(out);
         }
 
-        let voice_count = self.voices.voice_count();
-        let change = voice_count as i64 - self.last_voice_count as i64;
+        self.voices.remove_ended_voices();
+        self.update_voice_counter(self.voices.voice_count());
+    }
+
+    /// Render only the highest amplitude voices when overloaded
+    fn render_with_priority(&mut self, out: &mut [f32]) {
+        // Collect voice indices and amplitudes for sorting
+        let mut voice_data: Vec<(usize, f32)> = self.voices
+            .iter_voices_mut()
+            .enumerate()
+            .map(|(idx, voice)| (idx, voice.amplitude()))
+            .filter(|(_, amp)| *amp > SILENCE_THRESHOLD)
+            .collect();
+
+        if voice_data.is_empty() {
+            return;
+        }
+
+        // Sort by amplitude descending (highest first)
+        voice_data.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Render only top N voices
+        let render_count = voice_data.len().min(self.max_voices_per_frame);
+        let indices_to_render: Vec<usize> = voice_data[..render_count]
+            .iter()
+            .map(|(idx, _)| *idx)
+            .collect();
+
+        // Render selected voices
+        for (current_idx, voice) in self.voices.iter_voices_mut().enumerate() {
+            if indices_to_render.contains(&current_idx) {
+                voice.render_to(out);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn update_voice_counter(&mut self, new_count: usize) {
+        let change = new_count as i64 - self.last_voice_count as i64;
         if change < 0 {
             self.shared_voice_counter
                 .fetch_sub((-change) as u64, Ordering::SeqCst);
-        } else {
+        } else if change > 0 {
             self.shared_voice_counter
                 .fetch_add(change as u64, Ordering::SeqCst);
         }
-        self.last_voice_count = voice_count;
+        self.last_voice_count = new_count;
     }
 
     pub fn has_voices(&self) -> bool {

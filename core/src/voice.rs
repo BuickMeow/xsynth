@@ -92,4 +92,11 @@ pub trait Voice: VoiceSampleGenerator + Send + Sync {
     fn is_killed(&self) -> bool;
 
     fn velocity(&self) -> u8;
+    
+    /// Returns the current amplitude of the voice (0.0 to 1.0)
+    /// Used for prioritizing which voices to render when overloaded
+    fn amplitude(&self) -> f32 {
+        // Default: estimate from velocity
+        self.velocity() as f32 / 127.0
+    }
 }

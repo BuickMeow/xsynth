@@ -1,8 +1,7 @@
 use std::{
-    collections::VecDeque,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     thread::{self},
 };
@@ -77,10 +76,8 @@ unsafe impl Sync for SendSyncStream {}
 unsafe impl Send for SendSyncStream {}
 
 struct RealtimeSynthThreadSharedData {
-    buffered_renderer: Arc<Mutex<BufferedRenderer>>,
-
+    buffered_renderer: Arc<std::sync::Mutex<BufferedRenderer>>,
     stream: SendSyncStream,
-
     event_senders: RealtimeEventSender,
 }
 
@@ -203,7 +200,7 @@ impl RealtimeSynth {
                 .unwrap();
         }
 
-        let mut vec_cache: VecDeque<Vec<f32>> = VecDeque::new();
+        let mut vec_cache: std::collections::VecDeque<Vec<f32>> = std::collections::VecDeque::new();
         for _ in 0..channel_count {
             vec_cache.push_front(Vec::new());
         }
@@ -227,10 +224,10 @@ impl RealtimeSynth {
             }
 
             let total_voices = channel_stats.iter().map(|c| c.voice_count()).sum();
-            total_voice_count.store(total_voices, Ordering::SeqCst);
+            total_voice_count.store(total_voices, Ordering::Relaxed);
         });
 
-        let buffered = Arc::new(Mutex::new(BufferedRenderer::new(
+        let buffered = Arc::new(std::sync::Mutex::new(BufferedRenderer::new(
             render,
             stream_params,
             calculate_render_size(sample_rate, config.render_window_ms),
@@ -239,7 +236,7 @@ impl RealtimeSynth {
         fn build_stream<T: SizedSample + ConvertSample>(
             device: &Device,
             stream_config: SupportedStreamConfig,
-            buffered: Arc<Mutex<BufferedRenderer>>,
+            buffered: Arc<std::sync::Mutex<BufferedRenderer>>,
         ) -> Stream {
             let err_fn = |err| eprintln!("an error occurred on stream: {err}");
             let mut output_vec = Vec::new();
@@ -252,7 +249,7 @@ impl RealtimeSynth {
                     move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                         output_vec.resize(data.len(), 0.0);
                         buffered.lock().unwrap().read(&mut output_vec);
-                        for (i, s) in limiter.limit_iter(output_vec.drain(0..)).enumerate() {
+                        for (i, s) in limiter.limit_iter(output_vec.drain(..)).enumerate() {
                             data[i] = ConvertSample::from_f32(s);
                         }
                     },
@@ -266,7 +263,7 @@ impl RealtimeSynth {
             cpal::SampleFormat::F32 => build_stream::<f32>(device, stream_config, buffered.clone()),
             cpal::SampleFormat::I16 => build_stream::<i16>(device, stream_config, buffered.clone()),
             cpal::SampleFormat::U16 => build_stream::<u16>(device, stream_config, buffered.clone()),
-            _ => panic!("unsupported sample format"), // I hate when crates use #[non_exhaustive]
+            _ => panic!("unsupported sample format"),
         };
 
         stream.play().unwrap();
@@ -362,7 +359,6 @@ impl RealtimeSynth {
 impl Drop for RealtimeSynth {
     fn drop(&mut self) {
         let data = self.data.take().unwrap();
-        // data.stream.pause().unwrap();
         drop(data);
         for handle in self.join_handles.drain(..) {
             handle.join().unwrap();

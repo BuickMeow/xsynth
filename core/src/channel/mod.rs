@@ -130,6 +130,16 @@ pub struct ChannelInitOptions {
     ///
     /// Default: `false`
     pub fade_out_killing: bool,
+    
+    /// Maximum number of voices to render per key per audio frame.
+    /// When there are more voices than this limit, only the loudest voices
+    /// will be rendered to maintain real-time performance.
+    /// 
+    /// Higher values = better quality but more CPU usage
+    /// Lower values = better performance but potential audio loss
+    ///
+    /// Default: `32`
+    pub max_voices_per_frame: usize,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -137,6 +147,7 @@ impl Default for ChannelInitOptions {
     fn default() -> Self {
         Self {
             fade_out_killing: false,
+            max_voices_per_frame: 32,
         }
     }
 }

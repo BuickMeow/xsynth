@@ -18,13 +18,9 @@ use super::AudioPipe;
 #[derive(Debug, Clone)]
 struct BufferedRendererStats {
     samples: Arc<AtomicI64>,
-
     last_samples_after_read: Arc<AtomicI64>,
-
     last_request_samples: Arc<AtomicI64>,
-
     render_time: Arc<RwLock<VecDeque<f64>>>,
-
     render_size: Arc<AtomicUsize>,
 }
 
@@ -59,7 +55,7 @@ impl BufferedRendererStatsReader {
     /// of how long the render thread spent rendering, from the max allowed time.
     pub fn average_renderer_load(&self) -> f64 {
         let queue = self.stats.render_time.read().unwrap();
-        let total = queue.len();
+        let total = queue.len().max(1);
         queue.iter().sum::<f64>() / total as f64
     }
 
@@ -80,19 +76,14 @@ impl BufferedRendererStatsReader {
 /// Designed to be used in realtime playback only.
 pub struct BufferedRenderer {
     stats: BufferedRendererStats,
-
     /// The receiver for samples (the render thread has the sender).
     receive: Receiver<Vec<f32>>,
-
     /// Remainder of samples from the last received samples vec.
     remainder: Vec<f32>,
-
     /// Whether the render thread should be killed.
     killed: Arc<RwLock<bool>>,
-
     /// The thread handle to wait for at the end.
     thread_handle: Option<JoinHandle<()>>,
-
     stream_params: AudioStreamParams,
 }
 
@@ -113,11 +104,8 @@ impl BufferedRenderer {
         let samples = Arc::new(AtomicI64::new(0));
         let last_request_samples = Arc::new(AtomicI64::new(0));
         let render_size = Arc::new(AtomicUsize::new(render_size));
-
         let last_samples_after_read = Arc::new(AtomicI64::new(0));
-
         let render_time = Arc::new(RwLock::new(VecDeque::new()));
-
         let killed = Arc::new(RwLock::new(false));
 
         let thread_handle = {
@@ -126,10 +114,11 @@ impl BufferedRenderer {
             let render_size = render_size.clone();
             let render_time = render_time.clone();
             let killed = killed.clone();
+            
             thread::Builder::new()
                 .name("xsynth_buffered_rendering".to_string())
                 .spawn(move || loop {
-                    let size = render_size.load(Ordering::SeqCst);
+                    let size = render_size.load(Ordering::Relaxed);
 
                     // The expected render time per iteration. It is slightly smaller (*90/100) than
                     // the real time so the render thread can catch up if it's behind.
@@ -138,8 +127,8 @@ impl BufferedRenderer {
 
                     // If the render thread is ahead by over ~10%, wait until more samples are required.
                     loop {
-                        let samples = samples.load(Ordering::SeqCst);
-                        let last_requested = last_request_samples.load(Ordering::SeqCst);
+                        let samples = samples.load(Ordering::Relaxed);
+                        let last_requested = last_request_samples.load(Ordering::Relaxed);
                         if samples > last_requested * 110 / 100 {
                             spin_sleep::sleep(delay / 10);
                         } else {
@@ -156,11 +145,11 @@ impl BufferedRenderer {
 
                     // Create the vec and write the samples
                     let mut vec =
-                        vec![Default::default(); size * stream_params.channels.count() as usize];
+                        vec![0.0f32; size * stream_params.channels.count() as usize];
                     render.read_samples(&mut vec);
 
                     // Send the samples, break if the pipe is broken
-                    samples.fetch_add(vec.len() as i64, Ordering::SeqCst);
+                    samples.fetch_add(vec.len() as i64, Ordering::Relaxed);
                     match tx.send(vec) {
                         Ok(_) => {}
                         Err(_) => break,
@@ -169,9 +158,9 @@ impl BufferedRenderer {
                     // Write the elapsed render time percentage to the render_time queue
                     {
                         let mut queue = render_time.write().unwrap();
-                        let elaspsed = start.elapsed().as_secs_f64();
+                        let elapsed = start.elapsed().as_secs_f64();
                         let total = delay.as_secs_f64();
-                        queue.push_front(elaspsed / total);
+                        queue.push_front(elapsed / total);
                         if queue.len() > 100 {
                             queue.pop_back();
                         }
@@ -211,11 +200,11 @@ impl BufferedRenderer {
         let samples = self
             .stats
             .samples
-            .fetch_sub(dest.len() as i64, Ordering::SeqCst);
+            .fetch_sub(dest.len() as i64, Ordering::Relaxed);
 
         self.stats
             .last_request_samples
-            .store(dest.len() as i64, Ordering::SeqCst);
+            .store(dest.len() as i64, Ordering::Relaxed);
 
         // Read from current remainder
         for r in self.remainder.drain(0..len) {
@@ -254,7 +243,7 @@ impl BufferedRenderer {
 
     /// Sets the number of samples that should be rendered each iteration.
     pub fn set_render_size(&self, size: usize) {
-        self.stats.render_size.store(size, Ordering::SeqCst);
+        self.stats.render_size.store(size, Ordering::Relaxed);
     }
 
     /// Returns a statistics reader.
