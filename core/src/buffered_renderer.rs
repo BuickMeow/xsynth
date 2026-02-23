@@ -224,16 +224,27 @@ impl BufferedRenderer {
         }
 
         // Read from output queue, leave the remainder if there is any
-        while self.remainder.is_empty() {
-            let mut buf = self.receive.recv().unwrap();
-
-            let len = buf.len().min(dest.len() - i);
-            for r in buf.drain(0..len) {
-                dest[i] = r;
-                i += 1;
+        // Use a timeout to prevent infinite blocking and reduce latency
+        let timeout = std::time::Duration::from_millis(100);
+        while self.remainder.is_empty() && i < dest.len() {
+            match self.receive.recv_timeout(timeout) {
+                Ok(mut buf) => {
+                    let len = buf.len().min(dest.len() - i);
+                    for r in buf.drain(0..len) {
+                        dest[i] = r;
+                        i += 1;
+                    }
+                    self.remainder = buf;
+                }
+                Err(_) => {
+                    // Timeout - fill remaining with silence to prevent hanging
+                    // This prevents audio dropout by at least providing silence
+                    for j in i..dest.len() {
+                        dest[j] = 0.0;
+                    }
+                    break;
+                }
             }
-
-            self.remainder = buf;
         }
 
         self.stats

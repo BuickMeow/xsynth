@@ -50,7 +50,7 @@ impl VoiceChannelParams {
 
         Self {
             stats: VoiceChannelStats::new(),
-            layers: Some(4),
+            layers: None,
             channel_sf,
             program: Default::default(),
             constant: VoiceChannelConst { stream_params },

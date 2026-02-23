@@ -70,7 +70,7 @@ impl RoughNpsTracker {
         self.check_time();
 
         loop {
-            let cutoff = self.last_time - 1000;
+            let cutoff = self.last_time.saturating_sub(1000);
             if let Some(window) = self.windows.front() {
                 if window.time < cutoff {
                     self.total_window_sum -= window.notes;

@@ -193,32 +193,53 @@ impl<Sampler: BufferSampler> SampleReaderLoopSustain<Sampler> {
 
 impl<Sampler: BufferSampler> SampleReader for SampleReaderLoopSustain<Sampler> {
     fn get(&mut self, pos: usize) -> f32 {
-        let mut pos = pos + self.offset;
+        let pos = pos + self.offset;
         let end = self.loop_end;
         let start = self.loop_start;
 
-        if !self.is_released {
-            if pos > end {
-                pos = (pos - end - 1) % (end - start) + start;
-                self.last = pos;
+        let final_pos = if !self.is_released {
+            if pos > end && end > start {
+                // Calculate wrapped position within the loop
+                let loop_len = end - start;
+                let wrapped = start + (pos - end - 1) % loop_len;
+                self.last = pos - self.offset; // Store original position for release phase
+                wrapped
+            } else {
+                pos
             }
         } else {
-            pos -= self.last;
-        }
+            // After release, continue from where we left off
+            let release_pos = pos - self.last;
+            release_pos
+        };
 
-        self.buffer.get(pos)
+        self.buffer.get(final_pos)
     }
 
     fn is_past_end(&self, pos: usize) -> bool {
+        if !self.is_released {
+            return false;
+        }
+        
         if let Some(len) = self.length {
-            pos - (self.last - self.offset).min(pos) >= len
+            // Calculate effective position after accounting for loop
+            let effective_pos = if self.last > self.offset {
+                pos + self.last - self.offset
+            } else {
+                pos
+            };
+            effective_pos >= len
         } else {
             false
         }
     }
 
     fn signal_release(&mut self) {
-        self.is_released = true;
+        if !self.is_released {
+            self.is_released = true;
+            // Store the current position when released for smooth transition
+            self.last = self.last.max(self.offset);
+        }
     }
 }
 
@@ -343,9 +364,12 @@ where
 
             unsafe {
                 for i in 0..S::Vf32::WIDTH {
-                    let time = self.increment_time(speed.get_unchecked(i) as f64);
+                    let speed_val = speed.get_unchecked(i);
+                    // Ensure positive speed to prevent negative time
+                    let speed_val = speed_val.abs().max(0.0001);
+                    let time = self.increment_time(speed_val as f64);
                     *indexes.get_unchecked_mut(i) = time as i32;
-                    *fractionals.get_unchecked_mut(i) = (time % 1.0) as f32;
+                    *fractionals.get_unchecked_mut(i) = (time.fract()) as f32;
                 }
             }
 
@@ -435,9 +459,12 @@ where
 
             unsafe {
                 for i in 0..S::Vf32::WIDTH {
-                    let time = self.increment_time(speed.get_unchecked(i) as f64);
+                    let speed_val = speed.get_unchecked(i);
+                    // Ensure positive speed to prevent negative time
+                    let speed_val = speed_val.abs().max(0.0001);
+                    let time = self.increment_time(speed_val as f64);
                     *indexes.get_unchecked_mut(i) = time as i32;
-                    *fractionals.get_unchecked_mut(i) = (time % 1.0) as f32;
+                    *fractionals.get_unchecked_mut(i) = (time.fract()) as f32;
                 }
             }
 

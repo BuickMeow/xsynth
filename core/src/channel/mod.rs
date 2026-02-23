@@ -228,27 +228,29 @@ impl VoiceChannel {
 
         match self.stream_params.channels {
             ChannelCount::Mono => {
-                // Volume
+                // Volume with smoother curve (cubic instead of quadratic for more natural response)
                 for sample in out.iter_mut() {
                     let vol = control.volume.get_next() * control.expression.get_next();
-                    let vol = vol.powi(2);
+                    // Use a gentler curve to prevent sudden volume jumps
+                    let vol = vol * vol * vol;
                     *sample *= vol;
                 }
             }
             ChannelCount::Stereo => {
-                // Volume
-                for sample in out.chunks_mut(2) {
-                    let vol = control.volume.get_next() * control.expression.get_next();
-                    let vol = vol.powi(2);
-                    sample[0] *= vol;
-                    sample[1] *= vol;
-                }
+                // Pre-calculate volume and pan to avoid redundant computations
+                let vol = control.volume.get_next() * control.expression.get_next();
+                // Use a gentler cubic curve to prevent sudden volume jumps
+                let vol = vol * vol * vol;
+                
+                // Pan with constant power panning law for smooth stereo image
+                let pan = control.pan.get_next().clamp(0.0, 1.0);
+                let pan_angle = pan * std::f32::consts::PI / 2.0;
+                let left_gain = pan_angle.cos();
+                let right_gain = pan_angle.sin();
 
-                // Pan
                 for sample in out.chunks_mut(2) {
-                    let pan = control.pan.get_next();
-                    sample[0] *= ((pan * std::f32::consts::PI / 2.0).cos()).min(1.0);
-                    sample[1] *= ((pan * std::f32::consts::PI / 2.0).sin()).min(1.0);
+                    sample[0] *= vol * left_gain;
+                    sample[1] *= vol * right_gain;
                 }
             }
         }

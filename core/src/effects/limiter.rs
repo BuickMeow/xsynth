@@ -6,6 +6,7 @@ struct SingleChannelLimiter {
     falloff: f32,
     strength: f32,
     min_thresh: f32,
+    max_output: f32,
 }
 
 impl SingleChannelLimiter {
@@ -15,25 +16,46 @@ impl SingleChannelLimiter {
             attack: 100.0,
             falloff: 16000.0,
             strength: 1.0,
-            min_thresh: 1.0,
+            min_thresh: 0.1,  // Lower threshold to allow more dynamic range
+            max_output: 0.95, // Prevent hard clipping by limiting maximum output
         }
     }
 
     fn limit(&mut self, val: f32) -> f32 {
         let abs = val.abs();
+        
+        // Smooth envelope follower with different attack/release times
         if self.loudness > abs {
+            // Release phase: slower decay
             self.loudness = (self.loudness * self.falloff + abs) / (self.falloff + 1.0);
         } else {
+            // Attack phase: faster response
             self.loudness = (self.loudness * self.attack + abs) / (self.attack + 1.0);
         }
 
-        if self.loudness < self.min_thresh {
-            self.loudness = self.min_thresh;
-        }
+        // Ensure minimum threshold to prevent division by very small numbers
+        let effective_loudness = self.loudness.max(self.min_thresh);
 
-        let val = val / (self.loudness * self.strength + 2.0 * (1.0 - self.strength)) / 2.0;
+        // Calculate gain reduction: when loudness is high, reduce more
+        // The formula now uses a softer knee to prevent hard limiting artifacts
+        let gain_reduction = 1.0 / (1.0 + (effective_loudness - 1.0).max(0.0) * self.strength);
+        
+        // Apply limiting with soft clipping for values near the threshold
+        let limited = val * gain_reduction;
+        
+        // Soft clipping to prevent any hard digital clipping
+        // Using tanh-like soft clipping for smooth transition
+        let soft_clipped = if limited.abs() > self.max_output {
+            let sign = limited.signum();
+            let excess = limited.abs() - self.max_output;
+            // Soft knee: compress excess rather than hard clip
+            sign * (self.max_output + excess / (1.0 + excess * 2.0))
+        } else {
+            limited
+        };
 
-        val
+        // Final hard limit as safety net
+        soft_clipped.clamp(-0.99, 0.99)
     }
 }
 
