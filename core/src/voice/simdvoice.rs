@@ -53,22 +53,50 @@ where
     S: Simd,
     T: SIMDVoiceGenerator<S, SIMDSampleStereo<S>>,
 {
+    #[inline(always)]
     fn render_to(&mut self, buffer: &mut [f32]) {
         simd_invoke!(S, {
-            for chunk in buffer.chunks_exact_mut(2) {
-                if self.remainder_pos == S::Vf32::WIDTH {
-                    self.remainder = self.generator.next_sample();
-                    self.remainder_pos = 0;
-                }
-
+            let width = S::Vf32::WIDTH;
+            let mut buf_idx = 0;
+            let buf_len = buffer.len();
+            
+            // First, consume any remainder from previous call
+            while buf_idx < buf_len && self.remainder_pos < width {
                 unsafe {
-                    // using get_unchecked here is safe because we check the bounds above
-                    // however the compiler doesn't seem to detect it otherwise.
-                    chunk[0] += self.remainder.0.get_unchecked(self.remainder_pos);
-                    chunk[1] += self.remainder.1.get_unchecked(self.remainder_pos);
+                    *buffer.get_unchecked_mut(buf_idx) += self.remainder.0.get_unchecked(self.remainder_pos);
+                    *buffer.get_unchecked_mut(buf_idx + 1) += self.remainder.1.get_unchecked(self.remainder_pos);
                 }
-
+                buf_idx += 2;
                 self.remainder_pos += 1;
+            }
+            
+            // Stereo has interleaved L/R, so we need to process samples individually
+            // But we can still benefit from batching generator calls
+            let samples_per_batch = width * 2;
+            while buf_idx + samples_per_batch <= buf_len {
+                let sample = self.generator.next_sample();
+                unsafe {
+                    let buf_ptr = buffer.as_mut_ptr().add(buf_idx);
+                    for i in 0..width {
+                        *buf_ptr.add(i * 2) += sample.0.get_unchecked(i);
+                        *buf_ptr.add(i * 2 + 1) += sample.1.get_unchecked(i);
+                    }
+                }
+                buf_idx += samples_per_batch;
+            }
+            
+            // Handle remaining samples
+            if buf_idx < buf_len {
+                self.remainder = self.generator.next_sample();
+                self.remainder_pos = 0;
+                while buf_idx < buf_len {
+                    unsafe {
+                        *buffer.get_unchecked_mut(buf_idx) += self.remainder.0.get_unchecked(self.remainder_pos);
+                        *buffer.get_unchecked_mut(buf_idx + 1) += self.remainder.1.get_unchecked(self.remainder_pos);
+                    }
+                    buf_idx += 2;
+                    self.remainder_pos += 1;
+                }
             }
         })
     }
@@ -118,19 +146,44 @@ where
     S: Simd,
     T: SIMDVoiceGenerator<S, SIMDSampleMono<S>>,
 {
+    #[inline(always)]
     fn render_to(&mut self, buffer: &mut [f32]) {
         simd_invoke!(S, {
-            let mut i = 0;
-            while i < buffer.len() {
-                if self.remainder_pos == S::Vf32::WIDTH {
-                    self.remainder = self.generator.next_sample();
-                    self.remainder_pos = 0;
+            let width = S::Vf32::WIDTH;
+            let mut buf_idx = 0;
+            let buf_len = buffer.len();
+            
+            // First, consume any remainder from previous call
+            while buf_idx < buf_len && self.remainder_pos < width {
+                unsafe {
+                    *buffer.get_unchecked_mut(buf_idx) += self.remainder.0.get_unchecked(self.remainder_pos);
                 }
-
-                buffer[i] += self.remainder.0[self.remainder_pos];
-                i += 1;
-
+                buf_idx += 1;
                 self.remainder_pos += 1;
+            }
+            
+            // Process SIMD batches using SIMD load/add/store
+            while buf_idx + width <= buf_len {
+                let sample = self.generator.next_sample();
+                unsafe {
+                    let buf_ptr = buffer.as_mut_ptr().add(buf_idx);
+                    let dst = S::Vf32::load_from_ptr_unaligned(buf_ptr);
+                    (dst + sample.0).copy_to_ptr_unaligned(buf_ptr);
+                }
+                buf_idx += width;
+            }
+            
+            // Handle remaining samples
+            if buf_idx < buf_len {
+                self.remainder = self.generator.next_sample();
+                self.remainder_pos = 0;
+                while buf_idx < buf_len {
+                    unsafe {
+                        *buffer.get_unchecked_mut(buf_idx) += self.remainder.0.get_unchecked(self.remainder_pos);
+                    }
+                    buf_idx += 1;
+                    self.remainder_pos += 1;
+                }
             }
         })
     }

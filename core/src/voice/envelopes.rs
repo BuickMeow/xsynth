@@ -627,55 +627,53 @@ impl<T: Simd> SIMDVoiceGenerator<T, SIMDSampleMono<T>> for SIMDVoiceEnvelope<T> 
     #[inline(always)]
     fn next_sample(&mut self) -> SIMDSampleMono<T> {
         simd_invoke!(T, {
-            match &mut self.state.stage_data {
-                StageData::Lerp(lerper, stage_time) => {
-                    if stage_time.is_ending() {
-                        if stage_time.is_intersecting_end() {
-                            // It is ended, and the SIMD array intersects the border of the envelope part.
-                            // Therefore, this needs to generate one float sample at a time for this SIMD array.
-                            self.manually_build_simd_sample()
+            // Use loop instead of recursion to avoid function call overhead
+            loop {
+                match &mut self.state.stage_data {
+                    StageData::Lerp(lerper, stage_time) => {
+                        if stage_time.is_ending() {
+                            if stage_time.is_intersecting_end() {
+                                return self.manually_build_simd_sample();
+                            } else {
+                                self.switch_to_next_stage();
+                                continue;
+                            }
                         } else {
-                            // Is ended, except the SIMD array isn't intersecting the end.
-                            // Therefore can jump to the next stage, and try again
-                            self.switch_to_next_stage();
-                            self.next_sample()
+                            let values = lerper.lerp_simd(stage_time.progress_simd_array());
+                            stage_time.increment();
+                            return SIMDSampleMono(values);
                         }
-                    } else {
-                        // No special conditions happening, return the next entire simd array lerped
-                        let values = lerper.lerp_simd(stage_time.progress_simd_array());
-                        stage_time.increment();
-                        SIMDSampleMono(values)
                     }
-                }
-                StageData::LerpConcave(lerper, stage_time) => {
-                    if stage_time.is_ending() {
-                        if stage_time.is_intersecting_end() {
-                            self.manually_build_simd_sample()
+                    StageData::LerpConcave(lerper, stage_time) => {
+                        if stage_time.is_ending() {
+                            if stage_time.is_intersecting_end() {
+                                return self.manually_build_simd_sample();
+                            } else {
+                                self.switch_to_next_stage();
+                                continue;
+                            }
                         } else {
-                            self.switch_to_next_stage();
-                            self.next_sample()
+                            let values = lerper.lerp_simd(stage_time.progress_simd_array());
+                            stage_time.increment();
+                            return SIMDSampleMono(values);
                         }
-                    } else {
-                        let values = lerper.lerp_simd(stage_time.progress_simd_array());
-                        stage_time.increment();
-                        SIMDSampleMono(values)
                     }
-                }
-                StageData::LerpConvex(lerper, stage_time) => {
-                    if stage_time.is_ending() {
-                        if stage_time.is_intersecting_end() {
-                            self.manually_build_simd_sample()
+                    StageData::LerpConvex(lerper, stage_time) => {
+                        if stage_time.is_ending() {
+                            if stage_time.is_intersecting_end() {
+                                return self.manually_build_simd_sample();
+                            } else {
+                                self.switch_to_next_stage();
+                                continue;
+                            }
                         } else {
-                            self.switch_to_next_stage();
-                            self.next_sample()
+                            let values = lerper.lerp_simd(stage_time.progress_simd_array());
+                            stage_time.increment();
+                            return SIMDSampleMono(values);
                         }
-                    } else {
-                        let values = lerper.lerp_simd(stage_time.progress_simd_array());
-                        stage_time.increment();
-                        SIMDSampleMono(values)
                     }
+                    StageData::Constant(constant) => return SIMDSampleMono(*constant),
                 }
-                StageData::Constant(constant) => SIMDSampleMono(*constant),
             }
         })
     }

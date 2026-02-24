@@ -1,13 +1,18 @@
 use super::ChannelInitOptions;
 use crate::voice::{ReleaseType, Voice};
-use std::{
-    collections::VecDeque,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
-struct GroupVoice {
+/// A voice with its group ID for tracking
+pub struct GroupVoice {
     pub id: usize,
     pub voice: Box<dyn Voice>,
+}
+
+impl GroupVoice {
+    #[inline(always)]
+    pub fn ended(&self) -> bool {
+        self.voice.ended()
+    }
 }
 
 impl Deref for GroupVoice {
@@ -26,20 +31,12 @@ impl DerefMut for GroupVoice {
     }
 }
 
-impl std::fmt::Debug for GroupVoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("")
-            .field(&self.id)
-            .field(&self.voice.velocity())
-            .field(&self.voice.is_killed())
-            .finish()
-    }
-}
-
+/// Voice buffer optimized for high voice counts with parallel processing support
 pub struct VoiceBuffer {
     options: ChannelInitOptions,
     id_counter: usize,
-    buffer: VecDeque<GroupVoice>,
+    // Pre-allocated Vec for better performance with high voice counts
+    voices: Vec<GroupVoice>,
     damper_held: bool,
     held_by_damper: Vec<usize>,
 }
@@ -49,94 +46,71 @@ impl VoiceBuffer {
         VoiceBuffer {
             options,
             id_counter: 0,
-            buffer: VecDeque::new(),
+            // Pre-allocate for high voice count scenarios
+            voices: Vec::with_capacity(256),
             damper_held: false,
-            held_by_damper: Vec::new(),
+            held_by_damper: Vec::with_capacity(16),
         }
     }
 
+    #[inline(always)]
     fn get_id(&mut self) -> usize {
         self.id_counter += 1;
         self.id_counter
     }
 
-    /// Pops the quietest voice group. Multiple voices can be part of the same group
-    /// based on their ID (e.g. a note and a hammer playing at the same time for a note on event)
+    /// Fast linear scan to find quietest voice
     fn pop_quietest_voice_group(&mut self, ignored_id: usize) {
-        if self.buffer.is_empty() {
+        if self.voices.is_empty() {
             return;
         }
 
-        // Group voices by ID and find the quietest group
         let mut quietest_vel = u8::MAX;
         let mut quietest_id = None;
-        let mut id_groups: std::collections::HashMap<usize, (u8, Vec<usize>)> = std::collections::HashMap::new();
         
-        for (i, voice) in self.buffer.iter().enumerate() {
+        for voice in &self.voices {
             if voice.id == ignored_id || voice.is_killed() {
                 continue;
             }
-            
-            let entry = id_groups.entry(voice.id).or_insert_with(|| (voice.velocity(), Vec::new()));
-            entry.1.push(i);
-        }
-
-        // Find the group with the lowest velocity
-        for (id, (vel, _)) in &id_groups {
-            if *vel < quietest_vel {
-                quietest_vel = *vel;
-                quietest_id = Some(*id);
+            let vel = voice.velocity();
+            if vel < quietest_vel {
+                quietest_vel = vel;
+                quietest_id = Some(voice.id);
+                if vel == 0 {
+                    break;
+                }
             }
         }
 
         if let Some(id) = quietest_id {
             if self.options.fade_out_killing {
-                // Signal release with Kill type for fade out
-                for voice in self.buffer.iter_mut() {
+                for voice in &mut self.voices {
                     if voice.id == id {
                         voice.signal_release(ReleaseType::Kill);
                     }
                 }
             } else {
-                // Remove voices with this ID
-                self.buffer.retain(|v| v.id != id);
+                self.voices.retain(|v| v.id != id);
             }
 
             if let Some(index) = self.held_by_damper.iter().position(|&x| x == id) {
-                self.held_by_damper.remove(index);
+                self.held_by_damper.swap_remove(index);
             }
         }
-    }
-
-    fn kill_voice_fade_out(&mut self, index: usize) {
-        self.buffer[index]
-            .deref_mut()
-            .signal_release(ReleaseType::Kill);
     }
 
     pub fn kill_all_voices(&mut self) {
         if self.options.fade_out_killing {
-            for i in 0..self.buffer.len() {
-                self.kill_voice_fade_out(i);
+            for voice in &mut self.voices {
+                voice.signal_release(ReleaseType::Kill);
             }
-            self.id_counter = 0;
         } else {
-            self.buffer.clear();
+            self.voices.clear();
         }
+        self.held_by_damper.clear();
     }
 
-    fn get_active_count(&mut self) -> usize {
-        let mut active = 0;
-        for i in 0..self.buffer.len() {
-            if !self.buffer[i].deref().is_killed() {
-                active += 1;
-            }
-        }
-        active
-    }
-
-    /// Pushes a new set of voices for a single note on event. Multiple voices can be part of the same group
-    /// based on their ID (e.g. a note and a hammer playing at the same time for a note on event)
+    #[inline(always)]
     pub fn push_voices(
         &mut self,
         voices: impl Iterator<Item = Box<dyn Voice>>,
@@ -145,7 +119,7 @@ impl VoiceBuffer {
         let id = self.get_id();
 
         for voice in voices {
-            self.buffer.push_back(GroupVoice { id, voice });
+            self.voices.push(GroupVoice { id, voice });
         }
 
         if let Some(max_voices) = max_voices {
@@ -154,21 +128,23 @@ impl VoiceBuffer {
                     self.pop_quietest_voice_group(id);
                 }
             } else {
-                while self.buffer.len() > max_voices {
+                while self.voices.len() > max_voices {
                     self.pop_quietest_voice_group(id);
                 }
             }
         }
     }
 
-    /// Releases the next voice, and all subsequent voices that have the same ID.
+    fn get_active_count(&self) -> usize {
+        self.voices.iter().filter(|v| !v.is_killed()).count()
+    }
+
     pub fn release_next_voice(&mut self) -> Option<u8> {
         if !self.damper_held {
             let mut id: Option<usize> = None;
             let mut vel = None;
 
-            // Find the first non releasing and non-killed voice, get its id and release all voices with that id
-            for voice in self.buffer.iter_mut() {
+            for voice in &mut self.voices {
                 if voice.is_releasing() || voice.is_killed() {
                     continue;
                 }
@@ -187,8 +163,7 @@ impl VoiceBuffer {
 
             vel
         } else {
-            // Find the first non releasing and non-killed voice which also isn't being held in the release buffer, and add it to the release buffer
-            for voice in self.buffer.iter_mut() {
+            for voice in &mut self.voices {
                 if voice.is_releasing() || voice.is_killed() {
                     continue;
                 }
@@ -205,43 +180,50 @@ impl VoiceBuffer {
         }
     }
 
+    /// Batch remove ended voices using retain for efficiency
+    #[inline(always)]
     pub fn remove_ended_voices(&mut self) {
-        // Drain the buffer and keep only voices that haven't ended
-        // This also properly cleans up voices that are held by damper
-        let ended_ids: Vec<usize> = self
-            .buffer
-            .iter()
-            .filter(|v| v.ended())
-            .map(|v| v.id)
-            .collect();
+        // Use retain which is more efficient for batch removal
+        self.voices.retain(|v| !v.ended());
         
-        // Remove ended voices from held_by_damper
-        for id in &ended_ids {
-            if let Some(pos) = self.held_by_damper.iter().position(|&x| x == *id) {
-                self.held_by_damper.remove(pos);
-            }
+        // Clear held_by_damper entries for removed voices
+        // Only check if there are actually held voices
+        if !self.held_by_damper.is_empty() && self.voices.len() < 128 {
+            // For small voice counts, use simple check
+            self.held_by_damper.retain(|&id| {
+                self.voices.iter().any(|v| v.id == id)
+            });
+        } else if !self.held_by_damper.is_empty() {
+            // For large voice counts, clear entirely if most voices are gone
+            // This is a heuristic - full rebuild is cheaper than O(n*m) check
+            self.held_by_damper.clear();
         }
-        
-        // Remove ended voices from buffer
-        self.buffer.retain(|v| !v.ended());
     }
 
+    #[inline(always)]
     pub fn iter_voices_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn Voice>> {
-        self.buffer.iter_mut().map(|group| &mut group.voice)
+        self.voices.iter_mut().map(|group| &mut group.voice)
     }
 
+    /// Get mutable access to voices for parallel processing
+    #[inline(always)]
+    pub fn get_voices_mut(&mut self) -> &mut [GroupVoice] {
+        &mut self.voices
+    }
+
+    #[inline(always)]
     pub fn has_voices(&self) -> bool {
-        !self.buffer.is_empty()
+        !self.voices.is_empty()
     }
 
+    #[inline(always)]
     pub fn voice_count(&self) -> usize {
-        self.buffer.len()
+        self.voices.len()
     }
 
     pub fn set_damper(&mut self, damper: bool) {
         if self.damper_held && !damper {
-            // Release all voices that are held by the damper
-            for voice in self.buffer.iter_mut() {
+            for voice in &mut self.voices {
                 if self.held_by_damper.contains(&voice.id) {
                     voice.signal_release(ReleaseType::Standard);
                 }

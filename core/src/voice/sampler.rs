@@ -48,9 +48,12 @@ pub struct F32BufferSampler(Arc<[f32]>);
 impl BufferSampler for F32BufferSampler {
     #[inline(always)]
     fn get(&self, pos: usize) -> f32 {
-        match self.0.get(pos) {
-            Some(v) => *v,
-            None => 0.0,
+        // SAFETY: Callers ensure pos is within bounds via is_past_end checks
+        // Use unchecked access for maximum performance in the hot path
+        if pos < self.0.len() {
+            unsafe { *self.0.get_unchecked(pos) }
+        } else {
+            0.0
         }
     }
 
@@ -367,7 +370,8 @@ where
                     let speed_val = speed.get_unchecked(i);
                     // Ensure positive speed to prevent negative time
                     let speed_val = speed_val.abs().max(0.0001);
-                    let time = self.increment_time(speed_val as f64);
+                    let time = self.time;
+                    self.time += speed_val as f64;
                     *indexes.get_unchecked_mut(i) = time as i32;
                     *fractionals.get_unchecked_mut(i) = (time.fract()) as f32;
                 }
@@ -462,7 +466,8 @@ where
                     let speed_val = speed.get_unchecked(i);
                     // Ensure positive speed to prevent negative time
                     let speed_val = speed_val.abs().max(0.0001);
-                    let time = self.increment_time(speed_val as f64);
+                    let time = self.time;
+                    self.time += speed_val as f64;
                     *indexes.get_unchecked_mut(i) = time as i32;
                     *fractionals.get_unchecked_mut(i) = (time.fract()) as f32;
                 }

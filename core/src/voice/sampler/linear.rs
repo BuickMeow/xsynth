@@ -23,13 +23,15 @@ impl<S: Simd, Reader: SampleReader> SIMDSampleGrabber<S> for SIMDLinearSampleGra
         simd_invoke!(S, {
             let ones = S::Vf32::set1(1.0f32);
             let blend = fractional;
-            let mut values_first = ones;
-            let mut values_second = ones;
+            let mut values_first = S::Vf32::zeroes();
+            let mut values_second = S::Vf32::zeroes();
 
-            for i in 0..S::Vf32::WIDTH {
-                let index = indexes[i] as usize;
-                values_first[i] = self.sampler_reader.get(index);
-                values_second[i] = self.sampler_reader.get(index + 1);
+            unsafe {
+                for i in 0..S::Vf32::WIDTH {
+                    let index = indexes.get_unchecked(i) as usize;
+                    *values_first.get_unchecked_mut(i) = self.sampler_reader.get(index);
+                    *values_second.get_unchecked_mut(i) = self.sampler_reader.get(index + 1);
+                }
             }
 
             let blended = values_first * (ones - blend) + values_second * blend;
