@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     channel::{ChannelAudioEvent, ChannelConfigEvent, ChannelEvent, VoiceChannel},
-    helpers::{prepapre_cache_vec, sum_simd},
+    helpers::{fast_zero_fill, prepapre_cache_vec, sum_simd},
     AudioPipe, AudioStreamParams,
 };
 
@@ -158,7 +158,10 @@ impl ChannelGroup {
 
     fn render_to(&mut self, buffer: &mut [f32]) {
         self.flush_events();
-        buffer.fill(0.0);
+        // Fast zero using write_bytes (optimized by compiler to SIMD)
+        unsafe {
+            std::ptr::write_bytes(buffer.as_mut_ptr(), 0, buffer.len());
+        }
 
         match self.thread_pool.as_ref() {
             Some(pool) => {
@@ -170,7 +173,7 @@ impl ChannelGroup {
                         .par_iter_mut()
                         .zip(sample_cache_vecs.par_iter_mut())
                         .for_each(|(channel, samples)| {
-                            prepapre_cache_vec(samples, len, 0.0);
+                            fast_zero_fill(samples, len);
                             channel.read_samples(samples.as_mut_slice());
                         });
 
@@ -187,7 +190,7 @@ impl ChannelGroup {
                     .iter_mut()
                     .zip(self.sample_cache_vecs.iter_mut())
                 {
-                    prepapre_cache_vec(samples, len, 0.0);
+                    fast_zero_fill(samples, len);
                     channel.read_samples(samples.as_mut_slice());
                 }
 

@@ -17,7 +17,7 @@ use xsynth_core::{
     channel::{ChannelConfigEvent, ChannelEvent, VoiceChannel},
     channel_group::SynthFormat,
     effects::VolumeLimiter,
-    helpers::{prepapre_cache_vec, sum_simd},
+    helpers::{fast_zero_fill, sum_simd},
     AudioPipe, AudioStreamParams, FunctionAudioPipe,
 };
 
@@ -212,7 +212,7 @@ impl RealtimeSynth {
         let render = FunctionAudioPipe::new(stream_params, move |out| {
             for sender in command_senders.iter() {
                 let mut buf = vec_cache.pop_front().unwrap();
-                prepapre_cache_vec(&mut buf, out.len(), 0.0);
+                fast_zero_fill(&mut buf, out.len());
 
                 sender.send(buf).unwrap();
             }
