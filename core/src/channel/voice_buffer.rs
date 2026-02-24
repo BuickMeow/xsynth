@@ -180,22 +180,25 @@ impl VoiceBuffer {
         }
     }
 
-    /// Batch remove ended voices using retain for efficiency
+    /// Batch remove ended voices using swap_remove for efficiency
+    /// swap_remove is O(1) per removal but changes order
     #[inline(always)]
     pub fn remove_ended_voices(&mut self) {
-        // Use retain which is more efficient for batch removal
-        self.voices.retain(|v| !v.ended());
+        // Use swap_remove for O(1) per-element removal
+        // This is faster than retain when removing many elements
+        let mut i = 0;
+        while i < self.voices.len() {
+            if self.voices[i].ended() {
+                self.voices.swap_remove(i);
+                // Don't increment i, check the swapped element
+            } else {
+                i += 1;
+            }
+        }
         
-        // Clear held_by_damper entries for removed voices
-        // Only check if there are actually held voices
-        if !self.held_by_damper.is_empty() && self.voices.len() < 128 {
-            // For small voice counts, use simple check
-            self.held_by_damper.retain(|&id| {
-                self.voices.iter().any(|v| v.id == id)
-            });
-        } else if !self.held_by_damper.is_empty() {
-            // For large voice counts, clear entirely if most voices are gone
-            // This is a heuristic - full rebuild is cheaper than O(n*m) check
+        // Always clear held_by_damper to avoid O(n*m) complexity
+        // This is the fastest approach for high voice counts
+        if !self.held_by_damper.is_empty() {
             self.held_by_damper.clear();
         }
     }

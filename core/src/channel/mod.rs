@@ -2,7 +2,7 @@ use std::sync::{atomic::AtomicU64, Arc};
 
 use crate::{
     effects::MultiChannelBiQuad,
-    helpers::{db_to_amp, prepapre_cache_vec, sum_simd, FREQS},
+    helpers::{db_to_amp, fast_zero_fill, sum_simd, FREQS},
     voice::VoiceControlData,
     AudioStreamParams, ChannelCount,
 };
@@ -266,7 +266,10 @@ impl VoiceChannel {
     fn push_key_events_and_render(&mut self, out: &mut [f32]) {
         self.params.load_program();
 
-        out.fill(0.0);
+        // Fast zero using write_bytes (optimized by compiler to SIMD)
+        unsafe {
+            std::ptr::write_bytes(out.as_mut_ptr(), 0, out.len());
+        }
         match self.threadpool.as_ref() {
             Some(pool) => {
                 let len = out.len();
@@ -280,13 +283,16 @@ impl VoiceChannel {
                                 .send_event(e, control_data, &params.channel_sf, params.layers);
                         }
 
-                        prepapre_cache_vec(&mut key.audio_cache, len, 0.0);
+                        fast_zero_fill(&mut key.audio_cache, len);
                         key.data.render_to(&mut key.audio_cache);
                     });
                 });
 
                 for key in self.key_voices.iter() {
-                    sum_simd(&key.audio_cache, out);
+                    // Skip keys without voices to avoid unnecessary sum_simd calls
+                    if key.data.has_voices() {
+                        sum_simd(&key.audio_cache, out);
+                    }
                 }
             }
             None => {

@@ -19,6 +19,20 @@ pub fn prepapre_cache_vec<T: Copy>(vec: &mut Vec<T>, len: usize, default: T) {
     vec.fill(default);
 }
 
+/// Fast zero-fill for f32 buffers using SIMD-like operations
+#[inline(always)]
+pub fn fast_zero_fill(vec: &mut Vec<f32>, len: usize) {
+    if vec.len() < len {
+        vec.reserve(len - vec.len());
+    }
+    unsafe {
+        vec.set_len(len);
+        // Use write_bytes for fast zeroing - this is optimized by the compiler
+        // to use SIMD instructions when available
+        std::ptr::write_bytes(vec.as_mut_ptr(), 0, len);
+    }
+}
+
 /// Thread-local buffer pool for voice rendering to avoid allocations
 thread_local! {
     static VOICE_RENDER_BUFFERS: RefCell<Vec<Vec<f32>>> = RefCell::new(Vec::new());
