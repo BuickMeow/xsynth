@@ -39,6 +39,7 @@ pub struct VoiceBuffer {
     voices: Vec<GroupVoice>,
     damper_held: bool,
     held_by_damper: Vec<usize>,
+    pub max_voices: Option<usize>,
 }
 
 impl VoiceBuffer {
@@ -50,6 +51,7 @@ impl VoiceBuffer {
             voices: Vec::with_capacity(256),
             damper_held: false,
             held_by_damper: Vec::with_capacity(16),
+            max_voices: Some(4),
         }
     }
 
@@ -114,7 +116,6 @@ impl VoiceBuffer {
     pub fn push_voices(
         &mut self,
         voices: impl Iterator<Item = Box<dyn Voice>>,
-        max_voices: Option<usize>,
     ) {
         let id = self.get_id();
 
@@ -122,7 +123,7 @@ impl VoiceBuffer {
             self.voices.push(GroupVoice { id, voice });
         }
 
-        if let Some(max_voices) = max_voices {
+        if let Some(max_voices) = self.max_voices {
             if self.options.fade_out_killing {
                 while self.get_active_count() > max_voices {
                     self.pop_quietest_voice_group(id);
@@ -234,5 +235,10 @@ impl VoiceBuffer {
             self.held_by_damper.clear();
         }
         self.damper_held = damper;
+    }
+
+    /// Set the maximum number of voices per key. None means no limit.
+    pub fn set_max_voices(&mut self, max: Option<usize>) {
+        self.max_voices = max;
     }
 }

@@ -280,7 +280,7 @@ impl VoiceChannel {
                     key_voices.par_iter_mut().for_each(move |key| {
                         for e in key.event_cache.drain(..) {
                             key.data
-                                .send_event(e, control_data, &params.channel_sf, params.layers);
+                                .send_event(e, control_data, &params.channel_sf);
                         }
 
                         fast_zero_fill(&mut key.audio_cache, len);
@@ -302,7 +302,6 @@ impl VoiceChannel {
                             e,
                             &self.voice_control_data,
                             &self.params.channel_sf,
-                            self.params.layers,
                         );
                     }
 

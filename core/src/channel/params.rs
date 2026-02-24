@@ -50,7 +50,7 @@ impl VoiceChannelParams {
 
         Self {
             stats: VoiceChannelStats::new(),
-            layers: None, // No limit by default
+            layers: Some(4), // Limit to 4 voices per key
             channel_sf,
             program: Default::default(),
             constant: VoiceChannelConst { stream_params },
